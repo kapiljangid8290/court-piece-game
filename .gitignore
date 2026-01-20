@@ -1,0 +1,38 @@
+# node
+node_modules/
+
+# next.js
+.next/
+out/
+
+# env
+.env
+.env.local
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+
+# IDE/editor
+.vscode/
+.idea/
+
+# Build artifacts
+dist/
+build/
+
+# Ignore nested node_modules explicitly
+client/node_modules/
+server/node_modules/
+
+# Lock files (optional to include)
+# package-lock.json
+# yarn.lock
+
+# Misc
+*.log
+
