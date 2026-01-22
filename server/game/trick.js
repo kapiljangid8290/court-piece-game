@@ -1,4 +1,4 @@
-function playCard(gameState, playerId, card) {
+function playCard(gameState, playerId, card, roomId) {
   if (gameState.phase !== "PLAYING") {
     return { error: "Game not in playing phase" };
   }
@@ -43,13 +43,13 @@ function playCard(gameState, playerId, card) {
 
   // If trick complete
   if (gameState.currentTrick.length === 4) {
-    resolveTrick(gameState);
+    resolveTrick(gameState, roomId);
   }
 
   return { success: true };
 }
 
-function resolveTrick(gameState) {
+function resolveTrick(gameState, roomId) {
   const trump = gameState.trump;
   const leadSuit = gameState.currentTrick[0].card.suit;
 
@@ -104,6 +104,21 @@ function resolveTrick(gameState) {
     "Score B:",
     gameState.teams.teamB.tricks
   );
+  
+  const { getIO } = require("../io");
+  const io = getIO();
+
+  const payload = {
+    winner,
+    teamA: gameState.teams.teamA.tricks,
+    teamB: gameState.teams.teamB.tricks,
+  };
+
+  if (roomId) {
+    io.to(roomId).emit("trick_end", payload);
+  } else {
+    io.emit("trick_end", payload);
+  }
 
   if (gameState.trickCount === 13) {
   gameState.phase = "SCORING";
