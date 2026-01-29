@@ -11,9 +11,11 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@tailwindcss/vite": "^4.1.18",
     "cors": "^2.8.5",
     "express": "^5.2.1",
     "socket.io": "^4.8.3",
-    "socket.io-client": "^4.8.3"
+    "socket.io-client": "^4.8.3",
+    "tailwindcss": "^4.1.18"
   }
 }

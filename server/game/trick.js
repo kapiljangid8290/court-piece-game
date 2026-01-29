@@ -37,20 +37,34 @@ function playCard(gameState, playerId, card, roomId) {
 
   // Add to trick
   gameState.currentTrick.push({ playerId, card });
+    // Advance turn index
+    gameState.currentTurnIndex = (gameState.currentTurnIndex + 1) % 4;
 
-  gameState.currentTurnIndex =
-    (gameState.currentTurnIndex + 1) % 4;
+    // Emit next turn to clients if the trick is not yet complete
+    if (gameState.currentTrick.length < 4) {
+      const { getIO } = require("../io");
+      const io = getIO();
+      const nextPlayer = gameState.callOrder[gameState.currentTurnIndex];
 
-  // If trick complete
-  if (gameState.currentTrick.length === 4) {
-    resolveTrick(gameState, roomId);
-  }
+      if (roomId) {
+        io.to(roomId).emit("turn_update", nextPlayer);
+      } else {
+        io.emit("turn_update", nextPlayer);
+      }
+    }
 
-  return { success: true };
+    // If trick complete
+    if (gameState.currentTrick.length === 4) {
+      const res = resolveTrick(gameState, roomId);
+      if (res && res.gameOver) {
+        return { success: true, gameOver: res };
+      }
+    }
+
+    return { success: true };
 }
 
 function resolveTrick(gameState, roomId) {
-  const trump = gameState.trump;
   const leadSuit = gameState.currentTrick[0].card.suit;
 
   function cardRank(card) {
@@ -74,8 +88,8 @@ function resolveTrick(gameState, roomId) {
     }
 
     if (
-      currCard.suit === trump &&
-      winCard.suit !== trump
+      currCard.suit === gameState.trumpSuit &&
+      winCard.suit !== gameState.trumpSuit
     ) {
       winningPlay = play;
     }
@@ -83,35 +97,89 @@ function resolveTrick(gameState, roomId) {
 
   const winner = winningPlay.playerId;
 
-  // Assign trick to team
-  if (["player1","player3"].includes(winner)) {
-    gameState.teams.teamA.tricks++;
-  } else {
-    gameState.teams.teamB.tricks++;
+  // helper to map player -> team
+  function getTeam(player) {
+    return ["player1", "player3"].includes(player) ? "teamA" : "teamB";
   }
 
+  const winningTeam = getTeam(winner);
+
+  // Ensure tricksWon structure
+  if (!gameState.tricksWon) {
+    gameState.tricksWon = { teamA: 0, teamB: 0 };
+  }
+
+  // Update tricks won
+  gameState.tricksWon[winningTeam] += 1;
+
   gameState.trickLeader = winner;
-  gameState.currentTurnIndex =
-    gameState.callOrder.indexOf(winner);
+  gameState.currentTurnIndex = gameState.callOrder.indexOf(winner);
 
   gameState.currentTrick = [];
-  gameState.trickCount++;
+  gameState.trickCount = (gameState.trickCount || 0) + 1;
 
-  console.log("🏆 Trick won by:", winner);
-  console.log(
-    "Score A:",
-    gameState.teams.teamA.tricks,
-    "Score B:",
-    gameState.teams.teamB.tricks
-  );
-  
+  console.log("🏆 Trick won by", winner, "(", winningTeam, ")");
+  console.log("📊 Score:", gameState.tricksWon);
+
   const { getIO } = require("../io");
   const io = getIO();
 
+  // Broadcast score update
+  if (roomId) {
+    io.to(roomId).emit("score_update", gameState.tricksWon);
+  } else {
+    io.emit("score_update", gameState.tricksWon);
+  }
+
+  // Check win condition
+  const bidTeam = gameState.highestCaller ? getTeam(gameState.highestCaller) : null;
+  const bidValue = gameState.highestCall || 0;
+
+  const bidTeamTricks = bidTeam ? gameState.tricksWon[bidTeam] : 0;
+
+  // Bid team wins
+  if (bidTeam && bidValue > 0 && bidTeamTricks >= bidValue) {
+    if (roomId) {
+      io.to(roomId).emit("game_over", {
+        winner: bidTeam,
+        reason: "Bid achieved",
+      });
+    } else {
+      io.emit("game_over", {
+        winner: bidTeam,
+        reason: "Bid achieved",
+      });
+    }
+
+    return { gameOver: true, winner: bidTeam, reason: "Bid achieved" };
+  }
+
+  // Opponent wins (cannot reach bid anymore)
+  const totalTricksPlayed = gameState.tricksWon.teamA + gameState.tricksWon.teamB;
+  const remainingTricks = 13 - totalTricksPlayed;
+
+  if (bidTeam && bidValue > 0 && bidTeamTricks + remainingTricks < bidValue) {
+    const otherTeam = bidTeam === "teamA" ? "teamB" : "teamA";
+
+    if (roomId) {
+      io.to(roomId).emit("game_over", {
+        winner: otherTeam,
+        reason: "Bid failed",
+      });
+    } else {
+      io.emit("game_over", {
+        winner: otherTeam,
+        reason: "Bid failed",
+      });
+    }
+
+    return { gameOver: true, winner: otherTeam, reason: "Bid failed" };
+  }
+
+  // Emit trick_end payload for clients
   const payload = {
     winner,
-    teamA: gameState.teams.teamA.tricks,
-    teamB: gameState.teams.teamB.tricks,
+    tricksWon: gameState.tricksWon,
   };
 
   if (roomId) {
@@ -120,12 +188,22 @@ function resolveTrick(gameState, roomId) {
     io.emit("trick_end", payload);
   }
 
-  if (gameState.trickCount === 13) {
-  gameState.phase = "SCORING";
-  const calculateScore = require("./scoring");
-  calculateScore(gameState);
-}
+  // After trick resolved, update clients with next turn (trick leader)
+  const nextPlayer = gameState.callOrder[gameState.currentTurnIndex];
+  if (roomId) {
+    io.to(roomId).emit("turn_update", nextPlayer);
+  } else {
+    io.emit("turn_update", nextPlayer);
+  }
 
+  // If all tricks played, move to SCORING
+  if (gameState.trickCount === 13) {
+    gameState.phase = "SCORING";
+    const calculateScore = require("./scoring");
+    calculateScore(gameState);
+  }
+
+  return { gameOver: false };
 }
 
 module.exports = playCard;

@@ -24,3 +24,25 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@keyframes cardToCenter {
+  0% {
+    transform: translate(-50%, 0) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -250px) scale(1.2);
+    opacity: 0;
+  }
+}
+
+.animate-card-to-center {
+  animation: cardToCenter 0.6s ease-in-out forwards;
+}
+@keyframes fly-to-center {
+  to {
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%) scale(1.1);
+  }
+}

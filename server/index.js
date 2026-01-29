@@ -8,6 +8,14 @@ const { createDeck, shuffleDeck } = require("./game/cards");
 const dealCards = require("./game/deal");
 const playCard = require("./game/trick");
 const declareTrump = require("./game/trump");
+const determineTrickWinner = require("./game/trickWinner");
+
+function getTeam(playerId) {
+  return playerId === "player1" || playerId === "player3"
+    ? "teamA"
+    : "teamB";
+}
+
 
 const app = express();
 app.use(cors());
@@ -16,6 +24,10 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: "*" },
 });
+
+// expose io to game logic
+const { setIO } = require("./io");
+setIO(io);
 
 // ======================
 // ROOMS STORAGE
@@ -112,6 +124,11 @@ io.on("connection", (socket) => {
     room.gameState = createInitialGameState();
     const gameState = room.gameState;
 
+    gameState.currentCallIndex = 0;
+    gameState.currentTurnIndex = 0;
+    gameState.highestCall = null;
+    gameState.highestCaller = null;
+
     let deck = createDeck();
     deck = shuffleDeck(deck);
     const dealt = dealCards(deck);
@@ -149,9 +166,17 @@ io.on("connection", (socket) => {
   if (!room || !room.gameState) return;
 
   const gameState = room.gameState;
+
   if (gameState.phase !== "CALLING") return;
 
-  // Update highest call
+  const expectedPlayer =
+    gameState.callOrder[gameState.currentCallIndex];
+
+  if (playerId !== expectedPlayer) {
+    return; // ignore invalid clicks
+  }
+
+  // update highest bid
   if (
     gameState.highestCall === null ||
     call > gameState.highestCall
@@ -165,7 +190,7 @@ io.on("connection", (socket) => {
     });
   }
 
-  // Move turn forward
+  // advance call turn
   gameState.currentCallIndex =
     (gameState.currentCallIndex + 1) % 4;
 
@@ -174,27 +199,17 @@ io.on("connection", (socket) => {
 
   io.to(roomId).emit("turn_update", nextPlayer);
 
-  // ✅ END CALLING ONLY WHEN TURN RETURNS TO HIGHEST BIDDER
-  if (
-    gameState.highestCaller &&
-    nextPlayer === gameState.highestCaller
-  ) {
+  // END CALLING after full round
+  if (gameState.currentCallIndex === 0) {
     gameState.phase = "TRUMP";
-
     io.to(roomId).emit("phase_update", "TRUMP");
-    io.to(roomId).emit("bid_winner", {
-      highestBidder: gameState.highestCaller,
-      highestBid: gameState.highestCall,
-    });
 
-    console.log(
-      "🟣 Calling finished. Winner:",
-      gameState.highestCaller,
-      "Bid:",
-      gameState.highestCall
-    );
+    // ONLY highest bidder declares trump
+    io.to(roomId).emit("turn_update", gameState.highestCaller);
   }
 });
+
+
 
 
   // ======================
@@ -259,7 +274,19 @@ console.log("♠️ Trump set:", gameState.trumpSuit);
     if (!room || !room.gameState) return;
 
     const gameState = room.gameState;
-    const result = playCard(gameState, playerId, card);
+    // Guard: ensure game is in PLAYING phase
+    if (gameState.phase !== "PLAYING") {
+      return socket.emit("play_error", "Not in playing phase");
+    }
+
+    // Guard: ensure it's the expected player's turn
+    const expectedPlayer =
+      gameState.callOrder[gameState.currentTurnIndex];
+
+    if (playerId !== expectedPlayer) {
+      return socket.emit("play_error", "Not your turn");
+    }
+    const result = playCard(gameState, playerId, card, roomId);
 
     if (result.error) {
       socket.emit("play_error", result.error);
@@ -272,14 +299,12 @@ console.log("♠️ Trump set:", gameState.trumpSuit);
     // Broadcast the played card to all clients
     io.to(roomId).emit("card_played", { playerId, card });
 
-    // ✅ MOVE TURN FORWARD
-    gameState.currentTurnIndex =
-      (gameState.currentTurnIndex + 1) % 4;
-
-    const nextPlayer =
-      gameState.callOrder[gameState.currentTurnIndex];
-
-    io.to(roomId).emit("turn_update", nextPlayer);
+    // If the trick resolution indicated game over, clear room state
+    if (result && result.gameOver) {
+      room.gameState = null;
+      console.log("🔚 Game over in room:", roomId, result);
+      return;
+    }
   });
 
   // ======================

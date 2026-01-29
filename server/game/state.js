@@ -39,3 +39,31 @@ function createInitialGameState() {
 }
 
 module.exports = createInitialGameState;
+
+module.exports = function createInitialGameState() {
+  return {
+    players: {
+      player1: { cards: [] },
+      player2: { cards: [] },
+      player3: { cards: [] },
+      player4: { cards: [] },
+    },
+
+    callOrder: ["player1", "player2", "player3", "player4"],
+    currentTurnIndex: 0,
+
+    phase: "CALLING",
+    highestCall: null,
+    highestCaller: null,
+    trumpSuit: null,
+    trumpCallerPartner: null,
+
+    currentTrick: [],
+
+    // 🟢 SCORING
+    tricksWon: {
+      teamA: 0, // p1 + p3
+      teamB: 0, // p2 + p4
+    },
+  };
+};

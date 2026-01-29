@@ -34,6 +34,11 @@ function makeCall(gameState, playerId, callValue) {
   if (gameState.currentCallIndex >= 4) {
     gameState.phase = "TRUMP";
   }
+if (call === "PASS") {
+  gameState.passed[playerId] = true;
+  advanceTurn();
+  return;
+}
 
   return { success: true };
 }
