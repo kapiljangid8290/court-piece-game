@@ -213,57 +213,44 @@ io.on("connection", (socket) => {
 
 
   // ======================
-  // DECLARE TRUMP
-  // ======================
-  socket.on("declare_trump", ({ playerId, trumpSuit }) => {
-    const roomId = socket.roomId;
-    const room = rooms[roomId];
-    if (!room || !room.gameState) return;
+// DECLARE TRUMP
+// ======================
+socket.on("declare_trump", ({ playerId, trumpSuit }) => {
+  const roomId = socket.roomId;
+  const room = rooms[roomId];
+  if (!room || !room.gameState) return;
 
-    const gameState = room.gameState;
-    const result = declareTrump(gameState, playerId, trumpSuit);
+  const gameState = room.gameState;
 
-    if (result.error) {
-      socket.emit("play_error", result.error);
-      return;
-    }
+  // guards
+  if (gameState.phase !== "TRUMP") return;
+  if (playerId !== gameState.highestCaller) return;
 
-    gameState.phase = "PLAYING";
-    gameState.phase = "PLAYING";
+  // ✅ SET TRUMP (SINGLE SOURCE OF TRUTH)
+  gameState.trump = trumpSuit;
 
-io.to(roomId).emit("phase_update", "PLAYING");
+  console.log("♠️ TRUMP SET:", trumpSuit);
 
-// ✅ Broadcast trump to ALL players
-io.to(roomId).emit("trump_set", {
-  trump: gameState.trumpSuit,
-  caller: gameState.highestCaller,
+  // ✅ BROADCAST ONCE
+  io.to(roomId).emit("trump_set", {
+    trump: trumpSuit,
+    caller: playerId,
+  });
+
+  // move to playing
+  gameState.phase = "PLAYING";
+  io.to(roomId).emit("phase_update", "PLAYING");
+
+  // highest bidder starts
+  gameState.currentTurnIndex =
+    gameState.callOrder.indexOf(gameState.highestCaller);
+
+  io.to(roomId).emit(
+    "turn_update",
+    gameState.callOrder[gameState.currentTurnIndex]
+  );
 });
 
-// Set first turn (highest caller starts)
-gameState.currentTurnIndex =
-  gameState.callOrder.indexOf(gameState.highestCaller);
-
-io.to(roomId).emit(
-  "turn_update",
-  gameState.callOrder[gameState.currentTurnIndex]
-);
-
-console.log("♠️ Trump set:", gameState.trumpSuit);
-
-
-    const firstPlayer =
-      gameState.callOrder[gameState.currentTurnIndex];
-
-    io.to(roomId).emit("turn_update", firstPlayer);
-
-    // Send partner cards ONLY now
-    io.to(roomId).emit(
-      "partner_cards",
-      gameState.players[gameState.trumpCallerPartner].cards
-    );
-
-    console.log("♠️ Trump declared:", trumpSuit);
-  });
 
   // ======================
   // PLAY CARD

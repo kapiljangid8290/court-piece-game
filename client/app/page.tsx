@@ -108,6 +108,11 @@ export default function Home() {
       setCurrentTurn(null);
     });
 
+    socket.on("trump_set", (data) => {
+  console.log("🟢 TRUMP_SET RECEIVED:", data);
+  setTrump(data.trump);
+});
+
     return () => socket.disconnect();
   }, []);
 
@@ -334,3 +339,4 @@ export default function Home() {
   );
 }
 // new branch push
+//hello
