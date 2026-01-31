@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import PlayingCard from "@/components/PlayingCard";
@@ -26,11 +27,23 @@ function sortCards(cards: Card[]) {
   });
 }
 
+
+/* ================= SEAT POSITIONS ================= */
+const SEAT_POSITIONS: Record<string, { x: number; y: number }> = {
+  player1: { x: 0, y: 120 },    // bottom (you)
+  player2: { x: 120, y: 0 },    // right
+  player3: { x: 0, y: -120 },   // top
+  player4: { x: -120, y: 0 },   // left
+};
+
 /* ================= PAGE ================= */
 
 export default function Home() {
+const searchParams = new URLSearchParams(window.location.search);
+const name = searchParams.get("name");
+const room = searchParams.get("room");
   const socketRef = useRef<Socket | null>(null);
-
+const tableCardRefs = useRef<HTMLDivElement[]>([]);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [roomInput, setRoomInput] = useState("");
   const [playerName, setPlayerName] = useState("");
@@ -43,11 +56,27 @@ export default function Home() {
   const [highestBid, setHighestBid] = useState<number | null>(null);
   const [highestBidder, setHighestBidder] = useState<string | null>(null);
   const [trump, setTrump] = useState<string | null>(null);
+  const [lastTrickWinner, setLastTrickWinner] = useState<string | null>(null);
+
+  const [scores, setScores] = useState({
+  teamA: 0,
+  teamB: 0,
+});
+
 
   const [cards, setCards] = useState<Card[]>([]);
   const [tableCards, setTableCards] = useState<
     { playerId: string; card: Card }[]
   >([]);
+
+  useEffect(() => {
+  const nameFromUrl = searchParams.get("name");
+
+  if (nameFromUrl) {
+    setPlayerName(nameFromUrl);
+  }
+}, [searchParams]);
+
 
   /* ================= SOCKET ================= */
 
@@ -93,9 +122,29 @@ export default function Home() {
       );
     });
 
-    socket.on("trick_end", () => {
-      setTimeout(() => setTableCards([]), 700);
-    });
+    socket.on("trick_end", ({ winner, tricksWon }) => {
+  setScores(tricksWon);
+  setLastTrickWinner(winner);
+
+  const target = SEAT_POSITIONS[winner];
+
+  // animate cards
+  tableCardRefs.current.forEach((el) => {
+    if (!el || !target) return;
+
+    el.style.transform = `translate(${target.x}px, ${target.y}px) scale(0.8)`;
+    el.style.opacity = "0";
+  });
+
+  // clear after animation
+  setTimeout(() => {
+    setTableCards([]);
+    tableCardRefs.current = [];
+    setLastTrickWinner(null);
+  }, 600);
+});
+
+
 
     socket.on("game_reset", () => {
       setGameStarted(false);
@@ -112,6 +161,20 @@ export default function Home() {
   console.log("🟢 TRUMP_SET RECEIVED:", data);
   setTrump(data.trump);
 });
+
+
+socket.on("score_update", (data) => {
+  setScores({
+    teamA: data.teamA,
+    teamB: data.teamB,
+  });
+});
+
+socket.on("score_update", (newScores) => {
+  console.log("📊 SCORE UPDATE:", newScores);
+  setScores(newScores);
+});
+
 
     return () => socket.disconnect();
   }, []);
@@ -182,6 +245,9 @@ export default function Home() {
 
       {/* TOP BAR */}
       <div className="fixed top-0 left-0 right-0 z-40 bg-black/80 px-6 py-3 flex justify-between text-sm">
+      <div className="text-sm">
+  Player: <b className="text-yellow-400">{playerName}</b>
+</div>
         <div>
           You: <b className="text-yellow-300">{playerId ?? "-"}</b> | Phase:{" "}
           <b className="text-blue-300">{phase}</b>
@@ -200,7 +266,37 @@ export default function Home() {
         </div>
       </div>
 
-     
+     {/* SCOREBOARD */}
+<div className="fixed top-16 right-4 z-40 bg-black/80 rounded-xl px-4 py-3 text-sm w-48 shadow-xl">
+  <h3 className="text-center font-bold text-yellow-400 mb-2">
+    Scoreboard
+  </h3>
+
+  <div className="space-y-2">
+    {/* TEAM A */}
+    <div className="flex justify-between items-center bg-green-700/40 px-3 py-2 rounded">
+      <div>
+        <div className="font-semibold">Team A</div>
+        <div className="text-xs text-gray-300">Player 1 • Player 3</div>
+      </div>
+      <div className="text-lg font-bold text-green-400">
+        {scores.teamA}
+      </div>
+    </div>
+
+    {/* TEAM B */}
+    <div className="flex justify-between items-center bg-blue-700/40 px-3 py-2 rounded">
+      <div>
+        <div className="font-semibold">Team B</div>
+        <div className="text-xs text-gray-300">Player 2 • Player 4</div>
+      </div>
+      <div className="text-lg font-bold text-blue-400">
+        {scores.teamB}
+      </div>
+    </div>
+  </div>
+</div>
+
 
       {/* JOIN */}
       {!roomId && (
@@ -311,14 +407,44 @@ export default function Home() {
         </div>
       )}
 
+{lastTrickWinner && (
+  <div className="fixed inset-0 flex items-center justify-center z-40 pointer-events-none">
+    <div className="bg-black/80 px-6 py-3 rounded-xl text-yellow-400 text-xl font-bold shadow-xl">
+      {lastTrickWinner} won the trick
+    </div>
+  </div>
+)}
+
+
       {/* TABLE */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
         <div className="w-56 h-56 rounded-full border-4 border-white/30 relative">
-          {tableCards.map(({ card }, i) => (
-            <div key={i} className="absolute inset-0 flex items-center justify-center">
-              <PlayingCard card={card} enabled={false} />
-            </div>
-          ))}
+          {tableCards.map(({ playerId, card }, i) => {
+  const isWinner = playerId === lastTrickWinner;
+
+  return (
+    <div
+      key={i}
+      ref={(el) => {
+        if (el) tableCardRefs.current[i] = el;
+      }}
+      className={`absolute inset-0 flex items-center justify-center
+        transition-all duration-500
+        ${isWinner ? "scale-110" : ""}
+      `}
+    >
+      <div
+        className={`rounded-xl transition-all duration-300
+          ${isWinner ? "ring-4 ring-yellow-400 shadow-[0_0_30px_gold]" : ""}
+        `}
+      >
+        <PlayingCard card={card} enabled={false} />
+      </div>
+    </div>
+  );
+})}
+
+
         </div>
       </div>
 
