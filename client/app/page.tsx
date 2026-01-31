@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import PlayingCard from "@/components/PlayingCard";
@@ -38,7 +39,9 @@ const SEAT_POSITIONS: Record<string, { x: number; y: number }> = {
 /* ================= PAGE ================= */
 
 export default function Home() {
-  
+const searchParams = new URLSearchParams(window.location.search);
+const name = searchParams.get("name");
+const room = searchParams.get("room");
   const socketRef = useRef<Socket | null>(null);
 const tableCardRefs = useRef<HTMLDivElement[]>([]);
   const [roomId, setRoomId] = useState<string | null>(null);
@@ -65,6 +68,15 @@ const tableCardRefs = useRef<HTMLDivElement[]>([]);
   const [tableCards, setTableCards] = useState<
     { playerId: string; card: Card }[]
   >([]);
+
+  useEffect(() => {
+  const nameFromUrl = searchParams.get("name");
+
+  if (nameFromUrl) {
+    setPlayerName(nameFromUrl);
+  }
+}, [searchParams]);
+
 
   /* ================= SOCKET ================= */
 
@@ -233,6 +245,9 @@ socket.on("score_update", (newScores) => {
 
       {/* TOP BAR */}
       <div className="fixed top-0 left-0 right-0 z-40 bg-black/80 px-6 py-3 flex justify-between text-sm">
+      <div className="text-sm">
+  Player: <b className="text-yellow-400">{playerName}</b>
+</div>
         <div>
           You: <b className="text-yellow-300">{playerId ?? "-"}</b> | Phase:{" "}
           <b className="text-blue-300">{phase}</b>

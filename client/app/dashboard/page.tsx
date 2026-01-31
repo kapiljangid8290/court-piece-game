@@ -1,81 +1,132 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { use, useState } from "react";
+import { getPlayerStats } from "@/lib/stats";
 
-export default function DashboardPage() {
-    const router = useRouter();
-  const [name, setName] = useState("");
-  const [savedName, setSavedName] = useState("");
+export default function Dashboard() {
+  const router = useRouter();
+
+  const [playerName, setPlayerName] = useState("");
+  const [roomCode, setRoomCode] = useState("");
+  const [stats, setStats] = useState({
+    gamesPlayed: 0,
+    gamesWon: 0,
+    totalBids: 0,
+  });
+
+  // Update stats when playerName changes
+  useEffect(() => {
+  if (!playerName.trim()) return;
+
+  const s = getPlayerStats(playerName);
+  setStats(s);
+}, [playerName]);
+
 
   return (
-    <main className="min-h-screen bg-gray-900 text-white p-8 space-y-8">
-      <h1 className="text-3xl font-bold">Dashboard</h1>
+    <main className="min-h-screen bg-gradient-to-br from-green-900 to-green-700 flex items-center justify-center text-white">
 
-      {/* PROFILE */}
-      <section className="bg-black/60 rounded-xl p-6 max-w-md">
-        <h2 className="text-xl font-bold mb-4">Profile</h2>
+        {/* PLAYER STATS */}
+{playerName && (
+  <div className="bg-white/10 rounded-xl p-4 mb-6">
+    <h3 className="text-sm text-yellow-400 font-bold mb-3">
+      Your Stats
+    </h3>
 
-        <input
-          className="w-full p-2 rounded bg-gray-800 text-white mb-3"
-          placeholder="Your name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
+    <div className="grid grid-cols-3 gap-3 text-center">
+      <div className="bg-black/40 rounded-lg p-3">
+        <div className="text-xl font-bold">{stats.gamesPlayed}</div>
+        <div className="text-xs text-gray-300">Games</div>
+      </div>
 
-        <button
-          onClick={() => setSavedName(name)}
-          className="bg-green-600 px-4 py-2 rounded"
-        >
-          Save Profile
-        </button>
+      <div className="bg-black/40 rounded-lg p-3">
+        <div className="text-xl font-bold text-green-400">
+          {stats.gamesWon}
+        </div>
+        <div className="text-xs text-gray-300">Wins</div>
+      </div>
 
-        {savedName && (
-          <p className="mt-3 text-green-400">
-            Saved as: {savedName}
-          </p>
-        )}
-      </section>
-
-      {/* STATS */}
-<section className="grid grid-cols-4 gap-4 max-w-4xl">
-  {[
-    ["Games Played", 24],
-    ["Games Won", 14],
-    ["Win Rate", "58%"],
-    ["Tricks Won", 312],
-  ].map(([label, value]) => (
-    <div
-      key={label}
-      className="bg-black/60 rounded-xl p-4 text-center"
-    >
-      <div className="text-gray-400 text-sm">{label}</div>
-      <div className="text-2xl font-bold text-yellow-400">
-        {value}
+      <div className="bg-black/40 rounded-lg p-3">
+        <div className="text-xl font-bold text-blue-400">
+          {stats.totalBids}
+        </div>
+        <div className="text-xs text-gray-300">Bids</div>
       </div>
     </div>
-  ))}
-</section>
+  </div>
+)}
 
-{/* GAME ENTRY */}
-<section className="flex gap-4 mt-6">
-  <button
-  onClick={() => router.push("/")}
-  className="bg-blue-600 px-6 py-3 rounded-xl text-lg"
->
-  Create Room
-</button>
+      <div className="w-full max-w-md bg-black/70 rounded-2xl shadow-2xl p-6">
 
+        {/* TITLE */}
+        <h1 className="text-3xl font-bold text-center text-yellow-400 mb-2">
+          Khuli Chokadi
+        </h1>
+        <p className="text-center text-sm text-gray-300 mb-6">
+          Play with friends • Bid • Trump • Win
+        </p>
 
-  <button
-  onClick={() => router.push("/")}
-  className="bg-purple-600 px-6 py-3 rounded-xl text-lg"
->
-  Join Room
-</button>
+        {/* PROFILE CARD */}
+        <div className="bg-white/10 rounded-xl p-4 mb-6">
+          <label className="block text-sm mb-1 text-gray-300">
+            Your Name
+          </label>
+          <input
+            value={playerName}
+            onChange={(e) => setPlayerName(e.target.value)}
+            placeholder="Enter your name"
+            className="w-full px-3 py-2 rounded bg-black/60 border border-white/20 focus:outline-none focus:ring-2 focus:ring-yellow-400"
+          />
+        </div>
 
-</section>
+        {/* ACTIONS */}
+        <div className="space-y-4">
 
+          {/* CREATE ROOM */}
+          <button
+            onClick={() => {
+              if (!playerName.trim()) {
+                alert("Enter your name");
+                return;
+              }
+              router.push(`/?name=${encodeURIComponent(playerName)}`);
+            }}
+            className="w-full py-3 rounded-xl bg-yellow-500 text-black font-bold hover:bg-yellow-400 transition"
+          >
+            🎮 Create Room
+          </button>
+
+          {/* JOIN ROOM */}
+          <div className="flex gap-2">
+            <input
+              value={roomCode}
+              onChange={(e) => setRoomCode(e.target.value)}
+              placeholder="Room Code"
+              className="flex-1 px-3 py-2 rounded bg-black/60 border border-white/20 focus:outline-none"
+            />
+            <button
+              onClick={() => {
+                if (!playerName.trim() || !roomCode.trim()) {
+                  alert("Enter name & room code");
+                  return;
+                }
+                router.push(
+                  `/?name=${encodeURIComponent(playerName)}&room=${roomCode}`
+                );
+              }}
+              className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 transition"
+            >
+              Join
+            </button>
+          </div>
+        </div>
+
+        {/* FOOTER */}
+        <p className="text-xs text-center text-gray-400 mt-6">
+          Team A: Player 1 & Player 3 • Team B: Player 2 & Player 4
+        </p>
+      </div>
     </main>
   );
 }
