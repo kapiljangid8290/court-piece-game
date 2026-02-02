@@ -4,6 +4,8 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import PlayingCard from "@/components/PlayingCard";
+import { incrementStat } from "@/lib/stats";
+
 
 /* ================= TYPES ================= */
 
@@ -62,6 +64,18 @@ const tableCardRefs = useRef<HTMLDivElement[]>([]);
   teamA: 0,
   teamB: 0,
 });
+
+const [gameOver, setGameOver] = useState(false);
+const [gameResult, setGameResult] = useState<{
+  winner: "teamA" | "teamB";
+  reason: string;
+} | null>(null);
+
+
+const myTeam =
+  playerId === "player1" || playerId === "player3"
+    ? "teamA"
+    : "teamB";
 
 
   const [cards, setCards] = useState<Card[]>([]);
@@ -173,6 +187,27 @@ socket.on("score_update", (data) => {
 socket.on("score_update", (newScores) => {
   console.log("📊 SCORE UPDATE:", newScores);
   setScores(newScores);
+});
+
+socket.on("game_over", ({ winner, reason }) => {
+  console.log("🏁 GAME OVER:", winner, reason);
+
+  if (!playerName) return;
+
+  // everyone played a game
+  incrementStat(playerName, "gamesPlayed", 1);
+
+  // winner team only
+  if (winner === myTeam) {
+    incrementStat(playerName, "gamesWon", 1);
+  }
+});
+
+socket.on("game_over", ({ winner, reason }) => {
+  console.log("🏁 GAME OVER:", winner, reason);
+
+  setGameResult({ winner, reason });
+  setGameOver(true);
 });
 
 
@@ -461,6 +496,84 @@ socket.on("score_update", (newScores) => {
           ))}
         </div>
       </div>
+
+      {gameOver && gameResult && (
+  <div className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center">
+    <div className="bg-white text-black rounded-2xl p-8 w-[360px] shadow-2xl text-center">
+
+      {/* TITLE */}
+      <h1 className="text-2xl font-extrabold mb-2">
+        {(
+          (gameResult.winner === "teamA" && ["player1","player3"].includes(playerId ?? "")) ||
+          (gameResult.winner === "teamB" && ["player2","player4"].includes(playerId ?? ""))
+        )
+          ? "🏆 YOU WON!"
+          : "😞 YOU LOST"}
+      </h1>
+
+      {/* WINNER INFO */}
+      <p className="text-sm text-gray-600 mb-4">
+        Winning Team:{" "}
+        <span className="font-bold uppercase">
+          {gameResult.winner}
+        </span>
+      </p>
+
+      {/* REASON */}
+      <div className="bg-gray-100 rounded-lg px-4 py-2 mb-4 text-sm">
+        Reason: <b>{gameResult.reason}</b>
+      </div>
+
+      {/* FINAL SCORE */}
+      <div className="border rounded-lg p-3 mb-4">
+        <h3 className="font-semibold mb-2">Final Score</h3>
+
+        <div className="flex justify-between text-sm">
+          <span>Team A</span>
+          <span className="font-bold">{scores.teamA}</span>
+        </div>
+
+        <div className="flex justify-between text-sm">
+          <span>Team B</span>
+          <span className="font-bold">{scores.teamB}</span>
+        </div>
+      </div>
+
+      {/* PLAYER INFO */}
+      <p className="text-xs text-gray-500 mb-4">
+        You are <b>{playerId}</b> —{" "}
+        <b>
+          {["player1","player3"].includes(playerId ?? "")
+            ? "Team A"
+            : "Team B"}
+        </b>
+      </p>
+
+      {/* ACTIONS */}
+      <div className="flex gap-3">
+        <button
+          onClick={() => {
+            setGameOver(false);
+            setGameResult(null);
+            socketRef.current?.emit("start_game");
+          }}
+          className="flex-1 bg-green-600 text-white py-2 rounded-lg font-semibold"
+        >
+          🔄 Play Again
+        </button>
+
+        <button
+          onClick={() => window.location.reload()}
+          className="flex-1 bg-gray-800 text-white py-2 rounded-lg font-semibold"
+        >
+          🏠 Exit
+        </button>
+      </div>
+
+    </div>
+  </div>
+)}
+
     </main>
   );
 }
