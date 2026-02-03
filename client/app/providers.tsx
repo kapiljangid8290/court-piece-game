@@ -1,13 +1,19 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { useRouter } from "next/navigation";
+import InviteModal from "@/components/InviteModal";
+
 
 export default function Providers({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const router = useRouter();
+  const [invite, setInvite] = useState<any>(null);
+
   useEffect(() => {
     const setupInviteListener = async () => {
       const {
@@ -27,9 +33,7 @@ export default function Providers({
             filter: `to_user=eq.${user.id}`,
           },
           (payload) => {
-            alert(
-              `You have been invited to a room!\nRoom ID: ${payload.new.room_id}`
-            );
+            setInvite(payload.new);
           }
         )
         .subscribe();
@@ -42,5 +46,54 @@ export default function Providers({
     setupInviteListener();
   }, []);
 
-  return <>{children}</>;
+  // ✅ ACCEPT INVITE
+  const acceptInvite = async () => {
+    if (!invite) return;
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) return;
+
+    // Add user to room
+    await supabase.from("room_members").insert({
+      room_id: invite.room_id,
+      user_id: user.id,
+    });
+
+    // Update invite status
+    await supabase
+      .from("room_invites")
+      .update({ status: "accepted" })
+      .eq("id", invite.id);
+
+    setInvite(null);
+    router.push(`/room/${invite.room_id}`);
+  };
+
+  // ❌ REJECT INVITE
+  const rejectInvite = async () => {
+    if (!invite) return;
+
+    await supabase
+      .from("room_invites")
+      .update({ status: "rejected" })
+      .eq("id", invite.id);
+
+    setInvite(null);
+  };
+
+  return (
+    <>
+      {children}
+
+      {/* 🔔 INVITE MODAL */}
+      <InviteModal
+        invite={invite}
+        onAccept={acceptInvite}
+        onReject={rejectInvite}
+      />
+    </>
+  );
 }

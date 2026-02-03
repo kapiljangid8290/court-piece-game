@@ -61,9 +61,10 @@ export default function Dashboard() {
       .single();
 
     if (error) {
-      alert("Failed to create room");
-      return;
-    }
+  console.error("ROOM CREATE ERROR:", error);
+  alert(error.message);
+  return;
+}
 
     await supabase.from("room_members").insert({
       room_id: room.id,

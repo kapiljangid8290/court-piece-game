@@ -10,17 +10,19 @@ function createInitialGameState() {
     },
 
     callOrder: ["player1", "player2", "player3", "player4"],
-    currentCallIndex: 0,
     currentTurnIndex: 0,
 
     highestCall: null,
     highestCaller: null,
 
-    trump: null,              // ✅ SINGLE SOURCE OF TRUTH
-    trumpCallerPartner: null,
+    // ✅ SINGLE trump variable
+    trump: null,
 
     currentTrick: [],
+    trickLeader: null,
+    trickCount: 0,
 
+    // ✅ SCOREBOARD STATE
     tricksWon: {
       teamA: 0,
       teamB: 0,

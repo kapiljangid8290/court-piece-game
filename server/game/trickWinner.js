@@ -1,36 +1,37 @@
-const rankOrder = [
-  "2","3","4","5","6","7","8","9","10","J","Q","K","A"
-];
-
-function cardRank(value) {
-  return rankOrder.indexOf(value);
-}
-
-module.exports = function determineTrickWinner(trick, trumpSuit) {
+function determineTrickWinner(trick, trumpSuit) {
   const leadSuit = trick[0].card.suit;
 
-  let winningPlay = trick[0];
+  // 1️⃣ Filter trump cards
+  const trumpCards = trick.filter(
+    (t) => t.card.suit === trumpSuit
+  );
 
-  for (const play of trick.slice(1)) {
-    const { card } = play;
+  // 2️⃣ Decide candidates
+  const candidates =
+    trumpCards.length > 0
+      ? trumpCards
+      : trick.filter((t) => t.card.suit === leadSuit);
 
-    // Trump beats non-trump
+  // 3️⃣ Rank cards
+  const VALUE_ORDER = [
+    "2","3","4","5","6","7","8","9","10","J","Q","K","A"
+  ];
+
+  let winner = candidates[0];
+
+  for (let c of candidates) {
     if (
-      card.suit === trumpSuit &&
-      winningPlay.card.suit !== trumpSuit
+      VALUE_ORDER.indexOf(c.card.value) >
+      VALUE_ORDER.indexOf(winner.card.value)
     ) {
-      winningPlay = play;
-      continue;
-    }
-
-    // Same suit comparison
-    if (
-      card.suit === winningPlay.card.suit &&
-      cardRank(card.value) > cardRank(winningPlay.card.value)
-    ) {
-      winningPlay = play;
+      winner = c;
     }
   }
 
-  return winningPlay.playerId;
-};
+  return {
+    winner: winner.playerId,
+    winningCard: winner.card,
+  };
+}
+
+module.exports = determineTrickWinner;
