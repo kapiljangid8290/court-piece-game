@@ -1,5 +1,6 @@
 "use client";
 
+import { socket } from "@/lib/socket";
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -7,6 +8,7 @@ import { supabase } from "@/lib/supabaseClient";
 type Player = {
   user_id: string;
   username: string;
+  last_seen: string;
 };
 
 export default function RoomPage() {
@@ -21,7 +23,9 @@ export default function RoomPage() {
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<any[]>([]);
 
-  // 🔐 LOAD USER + PROFILE + ROOM DATA
+  /* -------------------------------
+     LOAD USER, PROFILE, ROOM
+  -------------------------------- */
   useEffect(() => {
     const loadData = async () => {
       const {
@@ -35,7 +39,6 @@ export default function RoomPage() {
 
       setUser(user);
 
-      // Profile
       const { data: profile } = await supabase
         .from("profiles")
         .select("*")
@@ -44,7 +47,6 @@ export default function RoomPage() {
 
       setProfile(profile);
 
-      // Room (host)
       const { data: room } = await supabase
         .from("rooms")
         .select("host_id")
@@ -59,24 +61,50 @@ export default function RoomPage() {
     loadData();
   }, [roomId, router]);
 
-  // 👥 FETCH PLAYERS (RLS SAFE)
-  const fetchPlayers = async () => {
-   const { data } = await supabase
-  .from("room_lobby_players")
-  .select("user_id, username")
-  .eq("room_id", roomId);
+  /* -------------------------------
+     SOCKET JOIN (IMPORTANT)
+  -------------------------------- */
+  useEffect(() => {
+    if (!user) return;
 
-   if (data) {
-  setPlayers(
-    data.map((p: any) => ({
-      user_id: p.user_id,
-      username: p.username,
-    }))
-  );
-}
+    socket.connect();
+
+    socket.emit("JOIN_ROOM", {
+      roomId,
+      userId: user.id,
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [user, roomId]);
+
+  /* -------------------------------
+     FETCH PLAYERS
+  -------------------------------- */
+  const fetchPlayers = async () => {
+    const { data, error } = await supabase
+      .from("room_lobby_players")
+      .select("user_id, username, last_seen")
+      .eq("room_id", roomId);
+
+    if (error) {
+      console.error("FETCH PLAYERS ERROR", error);
+      return;
+    }
+
+    setPlayers(
+      data.map((p: any) => ({
+        user_id: p.user_id,
+        username: p.username,
+        last_seen: p.last_seen,
+      }))
+    );
   };
 
-  // 🔄 REALTIME PLAYER UPDATES
+  /* -------------------------------
+     REALTIME ROOM MEMBERS
+  -------------------------------- */
   useEffect(() => {
     const channel = supabase
       .channel(`room-members-${roomId}`)
@@ -88,9 +116,7 @@ export default function RoomPage() {
           table: "room_members",
           filter: `room_id=eq.${roomId}`,
         },
-        () => {
-          fetchPlayers();
-        }
+        fetchPlayers
       )
       .subscribe();
 
@@ -99,7 +125,31 @@ export default function RoomPage() {
     };
   }, [roomId]);
 
-  // 🔍 SEARCH USERS
+  /* -------------------------------
+     PRESENCE HEARTBEAT
+  -------------------------------- */
+  useEffect(() => {
+    if (!user) return;
+
+    const updatePresence = async () => {
+      await supabase
+        .from("room_members")
+        .update({ last_seen: new Date().toISOString() })
+        .eq("room_id", roomId)
+        .eq("user_id", user.id);
+    };
+
+    updatePresence();
+    const interval = setInterval(updatePresence, 10000);
+    return () => clearInterval(interval);
+  }, [user, roomId]);
+
+  const isOnline = (lastSeen: string) =>
+    Date.now() - new Date(lastSeen).getTime() < 20000;
+
+  /* -------------------------------
+     SEARCH USERS
+  -------------------------------- */
   const searchUsers = async () => {
     if (!search.trim()) return;
 
@@ -111,16 +161,32 @@ export default function RoomPage() {
     setResults(data || []);
   };
 
-  // 📩 INVITE USER
-  const inviteUser = async (toUserId: string) => {
-    await supabase.from("room_invites").insert({
-      room_id: roomId,
-      from_user: user.id,
-      to_user: toUserId,
+  /* -------------------------------
+     START GAME (HOST ONLY)
+  -------------------------------- */
+  const startGame = async () => {
+    if (!user) return;
+
+    const res = await fetch("/api/start-game", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        roomId,
+        players: players.map((p) => p.user_id),
+      }),
     });
 
-    alert("Invite sent!");
+    if (!res.ok) {
+      alert("Failed to start game");
+      return;
+    }
+
+    const { gameId } = await res.json();
+    router.push(`/game/${gameId}`);
   };
+
+  const isHost = user?.id === hostId;
+  const canStart = isHost && players.length === 4;
 
   if (!profile) {
     return (
@@ -130,18 +196,13 @@ export default function RoomPage() {
     );
   }
 
-  const isHost = user.id === hostId;
-  const canStart = isHost && players.length === 4;
-
   return (
     <main className="min-h-screen bg-green-900 text-white p-6">
       <div className="max-w-xl mx-auto">
-
         <h1 className="text-2xl font-bold mb-4 text-yellow-400">
           Room Lobby
         </h1>
 
-        {/* PLAYERS */}
         <div className="bg-black/40 rounded-xl p-4 mb-6">
           <h2 className="text-lg font-bold mb-3">
             Players ({players.length}/4)
@@ -153,67 +214,33 @@ export default function RoomPage() {
               className="flex justify-between items-center bg-black/30 p-2 rounded mb-2"
             >
               <span>{p.username}</span>
-              {p.user_id === hostId && (
-                <span className="text-yellow-400 text-sm">👑 Host</span>
-              )}
+              <div className="flex gap-2 items-center">
+                {p.user_id === hostId && (
+                  <span className="text-yellow-400 text-sm">👑 Host</span>
+                )}
+                <span
+                  className={`text-xs px-2 py-0.5 rounded ${
+                    isOnline(p.last_seen)
+                      ? "bg-green-600"
+                      : "bg-gray-600"
+                  }`}
+                >
+                  {isOnline(p.last_seen) ? "Online" : "Offline"}
+                </span>
+              </div>
             </div>
           ))}
-
-          {players.length < 4 && (
-            <p className="text-sm text-gray-300 mt-2">
-              Waiting for players…
-            </p>
-          )}
         </div>
 
-        {/* START GAME (HOST ONLY) */}
         {isHost && (
           <button
+            onClick={startGame}
             disabled={!canStart}
-            className={`w-full py-3 rounded-xl font-bold mb-6 ${
-              canStart
-                ? "bg-yellow-500 text-black hover:bg-yellow-400"
-                : "bg-gray-600 text-gray-300 cursor-not-allowed"
-            }`}
+            className="w-full py-3 rounded-xl font-bold bg-yellow-500 text-black disabled:bg-gray-600"
           >
             ▶️ Start Game
           </button>
         )}
-
-        {/* INVITE */}
-        <div className="bg-black/40 rounded-xl p-4">
-          <h2 className="text-lg font-bold mb-3">Invite Player</h2>
-
-          <div className="flex gap-2 mb-3">
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search username"
-              className="flex-1 px-3 py-2 rounded bg-black border border-white/20"
-            />
-            <button
-              onClick={searchUsers}
-              className="px-4 py-2 bg-yellow-500 text-black rounded"
-            >
-              Search
-            </button>
-          </div>
-
-          {results.map((u) => (
-            <div
-              key={u.id}
-              className="flex justify-between items-center bg-black/30 p-2 rounded mb-2"
-            >
-              <span>{u.username}</span>
-              <button
-                onClick={() => inviteUser(u.id)}
-                className="text-sm bg-blue-600 px-3 py-1 rounded"
-              >
-                Invite
-              </button>
-            </div>
-          ))}
-        </div>
       </div>
     </main>
   );

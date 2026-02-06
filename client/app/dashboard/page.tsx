@@ -9,9 +9,12 @@ export default function Dashboard() {
 
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   const [roomCode, setRoomCode] = useState("");
 
-  // 🔐 Load logged-in user + profile
+  /* ----------------------------
+     LOAD USER + PROFILE
+  ----------------------------- */
   useEffect(() => {
     const loadUser = async () => {
       const {
@@ -25,24 +28,33 @@ export default function Dashboard() {
 
       setUser(user);
 
-      const { data: profile } = await supabase
+      const { data: profile, error } = await supabase
         .from("profiles")
         .select("*")
         .eq("id", user.id)
         .single();
 
-      if (!profile) {
+      if (error || !profile) {
+        router.push("/onboarding");
+        return;
+      }
+
+      // 🔑 IMPORTANT CHECK
+      if (!profile.username) {
         router.push("/onboarding");
         return;
       }
 
       setProfile(profile);
+      setLoading(false);
     };
 
     loadUser();
   }, [router]);
 
-  // 🎮 Create Room
+  /* ----------------------------
+     CREATE ROOM
+  ----------------------------- */
   const createRoom = async () => {
     if (!user) return;
 
@@ -61,10 +73,9 @@ export default function Dashboard() {
       .single();
 
     if (error) {
-  console.error("ROOM CREATE ERROR:", error);
-  alert(error.message);
-  return;
-}
+      alert(error.message);
+      return;
+    }
 
     await supabase.from("room_members").insert({
       room_id: room.id,
@@ -75,7 +86,9 @@ export default function Dashboard() {
     router.push(`/room/${room.id}`);
   };
 
-  // 🔑 Join Room
+  /* ----------------------------
+     JOIN ROOM
+  ----------------------------- */
   const joinRoom = async () => {
     if (!user || !roomCode.trim()) {
       alert("Enter room code");
@@ -101,8 +114,10 @@ export default function Dashboard() {
     router.push(`/room/${room.id}`);
   };
 
-  // ⏳ Loading state
-  if (!profile) {
+  /* ----------------------------
+     LOADING
+  ----------------------------- */
+  if (loading) {
     return (
       <main className="min-h-screen flex items-center justify-center text-white bg-black">
         Loading...
@@ -110,19 +125,20 @@ export default function Dashboard() {
     );
   }
 
+  /* ----------------------------
+     UI
+  ----------------------------- */
   return (
     <main className="min-h-screen bg-gradient-to-br from-green-900 to-green-700 flex items-center justify-center text-white">
       <div className="w-full max-w-md bg-black/70 rounded-2xl shadow-2xl p-6">
-
-        {/* TITLE */}
         <h1 className="text-3xl font-bold text-center text-yellow-400 mb-2">
           Khuli Chokadi
         </h1>
+
         <p className="text-center text-sm text-gray-300 mb-6">
           Play with friends • Bid • Trump • Win
         </p>
 
-        {/* PROFILE CARD */}
         <div className="bg-white/10 rounded-xl p-4 mb-6 text-center">
           <p className="text-sm text-gray-300">Logged in as</p>
           <p className="text-lg font-bold text-yellow-400">
@@ -130,38 +146,29 @@ export default function Dashboard() {
           </p>
         </div>
 
-        {/* ACTIONS */}
         <div className="space-y-4">
-
-          {/* CREATE ROOM */}
           <button
             onClick={createRoom}
-            className="w-full py-3 rounded-xl bg-yellow-500 text-black font-bold hover:bg-yellow-400 transition"
+            className="w-full py-3 rounded-xl bg-yellow-500 text-black font-bold hover:bg-yellow-400"
           >
             🎮 Create Room
           </button>
 
-          {/* JOIN ROOM */}
           <div className="flex gap-2">
             <input
               value={roomCode}
               onChange={(e) => setRoomCode(e.target.value)}
               placeholder="Room Code"
-              className="flex-1 px-3 py-2 rounded bg-black/60 border border-white/20 focus:outline-none"
+              className="flex-1 px-3 py-2 rounded bg-black/60 border border-white/20"
             />
             <button
               onClick={joinRoom}
-              className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 transition"
+              className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500"
             >
               Join
             </button>
           </div>
         </div>
-
-        {/* FOOTER */}
-        <p className="text-xs text-center text-gray-400 mt-6">
-          Team A: Player 1 & Player 3 • Team B: Player 2 & Player 4
-        </p>
       </div>
     </main>
   );
