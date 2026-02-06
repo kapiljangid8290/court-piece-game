@@ -55,11 +55,46 @@ function playCard(gameState, playerId, card, roomId) {
 
     // If trick complete
     if (gameState.currentTrick.length === 4) {
-      const res = resolveTrick(gameState, roomId);
-      if (res && res.gameOver) {
-        return { success: true, gameOver: res };
-      }
-    }
+  const determineTrickWinner = require("./trickWinner");
+  const { getIO } = require("../io");
+  const io = getIO();
+
+  const { winner } = determineTrickWinner(
+    gameState.currentTrick,
+    gameState.trump
+  );
+
+  const winningTeam =
+    ["player1", "player3"].includes(winner)
+      ? "teamA"
+      : "teamB";
+
+  gameState.tricksWon[winningTeam] += 1;
+
+  console.log("🏆 Trick won by:", winner);
+  console.log("📊 Score:", gameState.tricksWon);
+
+  // 🔥 SEND SCORE UPDATE
+  io.to(roomId).emit("score_update", gameState.tricksWon);
+
+  // next trick
+  gameState.currentTurnIndex =
+    gameState.callOrder.indexOf(winner);
+
+  gameState.currentTrick = [];
+  gameState.trickCount += 1;
+
+  io.to(roomId).emit("trick_end", {
+    winner,
+    tricksWon: gameState.tricksWon,
+  });
+
+  io.to(roomId).emit(
+    "turn_update",
+    gameState.callOrder[gameState.currentTurnIndex]
+  );
+}
+
 
     return { success: true };
 }
@@ -74,28 +109,13 @@ function resolveTrick(gameState, roomId) {
     return order.indexOf(card.value);
   }
 
-  let winningPlay = gameState.currentTrick[0];
+  const determineTrickWinner = require("./trickWinner");
 
-  for (let play of gameState.currentTrick) {
-    const winCard = winningPlay.card;
-    const currCard = play.card;
+const { winner } = determineTrickWinner(
+  gameState.currentTrick,
+  gameState.trump
+);
 
-    if (
-      currCard.suit === winCard.suit &&
-      cardRank(currCard) > cardRank(winCard)
-    ) {
-      winningPlay = play;
-    }
-
-    if (
-      currCard.suit === gameState.trumpSuit &&
-      winCard.suit !== gameState.trumpSuit
-    ) {
-      winningPlay = play;
-    }
-  }
-
-  const winner = winningPlay.playerId;
 
   // helper to map player -> team
   function getTeam(player) {

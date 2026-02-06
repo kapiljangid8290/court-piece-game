@@ -275,6 +275,9 @@ socket.on("declare_trump", ({ playerId, trumpSuit }) => {
     }
     const result = playCard(gameState, playerId, card, roomId);
 
+    
+
+
     if (result.error) {
       socket.emit("play_error", result.error);
       return;

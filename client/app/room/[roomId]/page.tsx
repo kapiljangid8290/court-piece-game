@@ -1,21 +1,31 @@
 "use client";
 
+import { socket } from "@/lib/socket";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-export default function RoomPage({ params }: any) {
-  const router = useRouter();
-  const roomId = params.roomId;
+type Player = {
+  user_id: string;
+  username: string;
+  last_seen: string;
+};
 
-  // 🧠 STATE
+export default function RoomPage() {
+  const router = useRouter();
+  const { roomId } = useParams<{ roomId: string }>();
+
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
-  const [players, setPlayers] = useState<any[]>([]);
+  const [players, setPlayers] = useState<Player[]>([]);
+  const [hostId, setHostId] = useState<string | null>(null);
+
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<any[]>([]);
 
-  // 🔐 LOAD USER + PROFILE + ROOM PLAYERS
+  /* -------------------------------
+     LOAD USER, PROFILE, ROOM
+  -------------------------------- */
   useEffect(() => {
     const loadData = async () => {
       const {
@@ -37,18 +47,109 @@ export default function RoomPage({ params }: any) {
 
       setProfile(profile);
 
-      const { data: members } = await supabase
-        .from("room_members")
-        .select("profiles(username)")
-        .eq("room_id", roomId);
+      const { data: room } = await supabase
+        .from("rooms")
+        .select("host_id")
+        .eq("id", roomId)
+        .single();
 
-      setPlayers(members || []);
+      setHostId(room?.host_id ?? null);
+
+      await fetchPlayers();
     };
 
     loadData();
   }, [roomId, router]);
 
-  // 🔍 SEARCH USERS BY USERNAME
+  /* -------------------------------
+     SOCKET JOIN (IMPORTANT)
+  -------------------------------- */
+  useEffect(() => {
+    if (!user) return;
+
+    socket.connect();
+
+    socket.emit("JOIN_ROOM", {
+      roomId,
+      userId: user.id,
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [user, roomId]);
+
+  /* -------------------------------
+     FETCH PLAYERS
+  -------------------------------- */
+  const fetchPlayers = async () => {
+    const { data, error } = await supabase
+      .from("room_lobby_players")
+      .select("user_id, username, last_seen")
+      .eq("room_id", roomId);
+
+    if (error) {
+      console.error("FETCH PLAYERS ERROR", error);
+      return;
+    }
+
+    setPlayers(
+      data.map((p: any) => ({
+        user_id: p.user_id,
+        username: p.username,
+        last_seen: p.last_seen,
+      }))
+    );
+  };
+
+  /* -------------------------------
+     REALTIME ROOM MEMBERS
+  -------------------------------- */
+  useEffect(() => {
+    const channel = supabase
+      .channel(`room-members-${roomId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "room_members",
+          filter: `room_id=eq.${roomId}`,
+        },
+        fetchPlayers
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [roomId]);
+
+  /* -------------------------------
+     PRESENCE HEARTBEAT
+  -------------------------------- */
+  useEffect(() => {
+    if (!user) return;
+
+    const updatePresence = async () => {
+      await supabase
+        .from("room_members")
+        .update({ last_seen: new Date().toISOString() })
+        .eq("room_id", roomId)
+        .eq("user_id", user.id);
+    };
+
+    updatePresence();
+    const interval = setInterval(updatePresence, 10000);
+    return () => clearInterval(interval);
+  }, [user, roomId]);
+
+  const isOnline = (lastSeen: string) =>
+    Date.now() - new Date(lastSeen).getTime() < 20000;
+
+  /* -------------------------------
+     SEARCH USERS
+  -------------------------------- */
   const searchUsers = async () => {
     if (!search.trim()) return;
 
@@ -60,16 +161,32 @@ export default function RoomPage({ params }: any) {
     setResults(data || []);
   };
 
-  // 📩 SEND INVITE
-  const inviteUser = async (toUserId: string) => {
-    await supabase.from("room_invites").insert({
-      room_id: roomId,
-      from_user: user.id,
-      to_user: toUserId,
+  /* -------------------------------
+     START GAME (HOST ONLY)
+  -------------------------------- */
+  const startGame = async () => {
+    if (!user) return;
+
+    const res = await fetch("/api/start-game", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        roomId,
+        players: players.map((p) => p.user_id),
+      }),
     });
 
-    alert("Invite sent!");
+    if (!res.ok) {
+      alert("Failed to start game");
+      return;
+    }
+
+    const { gameId } = await res.json();
+    router.push(`/game/${gameId}`);
   };
+
+  const isHost = user?.id === hostId;
+  const canStart = isHost && players.length === 4;
 
   if (!profile) {
     return (
@@ -82,57 +199,48 @@ export default function RoomPage({ params }: any) {
   return (
     <main className="min-h-screen bg-green-900 text-white p-6">
       <div className="max-w-xl mx-auto">
+        <h1 className="text-2xl font-bold mb-4 text-yellow-400">
+          Room Lobby
+        </h1>
 
-        {/* ROOM HEADER */}
-        <h1 className="text-2xl font-bold mb-4">Room</h1>
-
-        {/* PLAYER LIST */}
         <div className="bg-black/40 rounded-xl p-4 mb-6">
-          <h2 className="text-lg font-bold mb-2">Players</h2>
-          {players.map((p, i) => (
-            <div key={i} className="text-sm">
-              • {p.profiles.username}
-            </div>
-          ))}
-        </div>
-
-        {/* INVITE SECTION */}
-        <div className="bg-black/40 rounded-xl p-4">
           <h2 className="text-lg font-bold mb-3">
-            Invite Player by Username
+            Players ({players.length}/4)
           </h2>
 
-          <div className="flex gap-2 mb-3">
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search username"
-              className="flex-1 px-3 py-2 rounded bg-black border border-white/20"
-            />
-            <button
-              onClick={searchUsers}
-              className="px-4 py-2 bg-yellow-500 text-black rounded"
-            >
-              Search
-            </button>
-          </div>
-
-          {/* SEARCH RESULTS */}
-          {results.map((u) => (
+          {players.map((p) => (
             <div
-              key={u.id}
+              key={p.user_id}
               className="flex justify-between items-center bg-black/30 p-2 rounded mb-2"
             >
-              <span>{u.username}</span>
-              <button
-                onClick={() => inviteUser(u.id)}
-                className="text-sm bg-blue-600 px-3 py-1 rounded"
-              >
-                Invite
-              </button>
+              <span>{p.username}</span>
+              <div className="flex gap-2 items-center">
+                {p.user_id === hostId && (
+                  <span className="text-yellow-400 text-sm">👑 Host</span>
+                )}
+                <span
+                  className={`text-xs px-2 py-0.5 rounded ${
+                    isOnline(p.last_seen)
+                      ? "bg-green-600"
+                      : "bg-gray-600"
+                  }`}
+                >
+                  {isOnline(p.last_seen) ? "Online" : "Offline"}
+                </span>
+              </div>
             </div>
           ))}
         </div>
+
+        {isHost && (
+          <button
+            onClick={startGame}
+            disabled={!canStart}
+            className="w-full py-3 rounded-xl font-bold bg-yellow-500 text-black disabled:bg-gray-600"
+          >
+            ▶️ Start Game
+          </button>
+        )}
       </div>
     </main>
   );
