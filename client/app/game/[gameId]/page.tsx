@@ -64,7 +64,9 @@ const [myPlayerSlot, setMyPlayerSlot] = useState<string | null>(null);
     };
   }, []);
 
-  
+  useEffect(() => {
+  socket.emit("JOIN_GAME", { roomId: gameId });
+}, [gameId]);
 
   const makeCall = (call: number | "PASS") => {
     socket.emit("make_call", {
