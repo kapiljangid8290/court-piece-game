@@ -4,13 +4,12 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-/* ================= TYPES ================= */
-
 type Room = {
   id: string;
   room_code: string;
   host_id: string;
   status: string;
+  game_id?: string | null;
 };
 
 type RoomMember = {
@@ -19,8 +18,6 @@ type RoomMember = {
   role: string;
   username: string | null;
 };
-
-/* ================= PAGE ================= */
 
 export default function LobbyPage() {
   const router = useRouter();
@@ -36,45 +33,50 @@ export default function LobbyPage() {
   /* ================= AUTH ================= */
 
   useEffect(() => {
-    const loadUser = async () => {
-      const { data } = await supabase.auth.getUser();
+    supabase.auth.getUser().then(({ data }) => {
       if (!data.user) {
         router.replace("/login");
         return;
       }
       setUserId(data.user.id);
       setLoading(false);
-    };
-    loadUser();
+    });
   }, [router]);
 
-  /* ================= ROOM ================= */
+  /* ================= LOAD ROOM ================= */
 
   useEffect(() => {
     if (!roomId) return;
 
-    supabase
-      .from("rooms")
-      .select("*")
-      .eq("id", roomId)
-      .single()
-      .then(({ data }) => setRoom(data ?? null));
-  }, [roomId]);
+    const loadRoom = async () => {
+      const { data } = await supabase
+        .from("rooms")
+        .select("*")
+        .eq("id", roomId)
+        .single();
 
-  /* ================= MEMBERS ================= */
+      if (data) {
+        setRoom(data);
+
+        // 🔥 If already playing → redirect
+        if (data.status === "playing" && data.game_id) {
+          router.replace(`/game/${data.game_id}`);
+        }
+      }
+    };
+
+    loadRoom();
+  }, [roomId, router]);
+
+  /* ================= LOAD MEMBERS ================= */
 
   const loadMembers = async () => {
     if (!roomId) return;
 
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("room_members_view")
       .select("id, user_id, role, username")
       .eq("room_id", roomId);
-
-    if (error) {
-      console.error("Failed to load members:", error.message);
-      return;
-    }
 
     setMembers(data ?? []);
   };
@@ -103,14 +105,44 @@ export default function LobbyPage() {
     };
   }, [roomId]);
 
-  /* ================= ACTIONS ================= */
+  /* ================= REALTIME ROOM STATUS ================= */
+
+  useEffect(() => {
+    if (!roomId) return;
+
+    const channel = supabase
+      .channel(`room-status-${roomId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "rooms",
+          filter: `id=eq.${roomId}`,
+        },
+        (payload) => {
+          const updated = payload.new as Room;
+
+          if (updated.status === "playing" && updated.game_id) {
+            router.replace(`/game/${updated.game_id}`);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [roomId, router]);
+
+  /* ================= CREATE ROOM ================= */
 
   const createRoom = async () => {
     if (!userId) return;
 
     const code = Math.random().toString(36).slice(2, 8).toUpperCase();
 
-    const { data, error } = await supabase
+    const { data: room } = await supabase
       .from("rooms")
       .insert({
         room_code: code,
@@ -120,47 +152,54 @@ export default function LobbyPage() {
       .select()
       .single();
 
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
     await supabase.from("room_members").insert({
-      room_id: data.id,
+      room_id: room.id,
       user_id: userId,
       role: "host",
     });
 
-    router.push(`/lobby?room=${data.id}`);
+    router.push(`/lobby?room=${room.id}`);
   };
 
-  const joinRoomByCode = async () => {
-    if (!roomCode.trim()) {
-      alert("Enter room code");
-      return;
-    }
+  /* ================= JOIN ROOM ================= */
 
-    const { data } = await supabase
+  const joinRoomByCode = async () => {
+    if (!roomCode.trim()) return alert("Enter room code");
+
+    const { data: room } = await supabase
       .from("rooms")
       .select("*")
       .eq("room_code", roomCode.trim().toUpperCase())
       .single();
 
-    if (!data) {
-      alert("Room not found");
-      return;
-    }
+    if (!room) return alert("Room not found");
 
     await supabase.from("room_members").insert({
-      room_id: data.id,
+      room_id: room.id,
       user_id: userId,
       role: "player",
     });
 
-    router.push(`/lobby?room=${data.id}`);
+    router.push(`/lobby?room=${room.id}`);
   };
 
-  /* ================= UI ================= */
+  /* ================= START GAME ================= */
+
+  const startGame = async () => {
+    if (!room || userId !== room.host_id) return;
+
+    const { data: gameId, error } = await supabase.rpc("start_game", {
+      p_room_id: room.id,
+    });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    // 🔥 IMMEDIATE redirect for host
+    router.replace(`/game/${gameId}`);
+  };
 
   if (loading) {
     return (
@@ -176,40 +215,29 @@ export default function LobbyPage() {
 
       {room && (
         <div className="bg-black/60 p-4 rounded-xl mb-6 max-w-md">
-          <h2 className="font-semibold text-lg mb-2">
-            Room Code:{" "}
-            <span className="text-yellow-400">{room.room_code}</span>
+          <h2 className="font-semibold mb-2">
+            Room Code: <span className="text-yellow-400">{room.room_code}</span>
           </h2>
 
-          <p className="text-sm mb-3">
-            Players ({members.length}/4)
-          </p>
+          <p className="text-sm mb-3">Players ({members.length}/4)</p>
 
-          <div className="space-y-2 mb-3">
-            {members.map((m) => (
-              <div
-                key={m.id}
-                className="flex justify-between bg-black/40 px-3 py-2 rounded"
-              >
-                <span>{m.username ?? "Player"}</span>
-
-                {m.role === "host" && (
-                  <span className="text-xs bg-yellow-400 text-black px-2 rounded">
-                    Host
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-
-          <p className="text-xs text-gray-400">
-            {members.length < 4
-              ? "Waiting for players to join…"
-              : "Room is full"}
-          </p>
+          {members.map((m) => (
+            <div
+              key={m.id}
+              className="flex justify-between bg-black/40 px-3 py-2 rounded mb-1"
+            >
+              <span>{m.username ?? "Player"}</span>
+              {m.role === "host" && (
+                <span className="text-xs bg-yellow-400 text-black px-2 rounded">
+                  Host
+                </span>
+              )}
+            </div>
+          ))}
 
           {userId === room.host_id && (
             <button
+              onClick={startGame}
               disabled={members.length !== 4}
               className="w-full mt-3 py-2 bg-green-500 text-black font-bold rounded disabled:opacity-50"
             >
