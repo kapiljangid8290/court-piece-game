@@ -7,15 +7,6 @@ const createInitialGameState = require("./game/state");
 const { createDeck, shuffleDeck } = require("./game/cards");
 const dealCards = require("./game/deal");
 const playCard = require("./game/trick");
-const declareTrump = require("./game/trump");
-const determineTrickWinner = require("./game/trickWinner");
-
-function getTeam(playerId) {
-  return playerId === "player1" || playerId === "player3"
-    ? "teamA"
-    : "teamB";
-}
-
 
 const app = express();
 app.use(cors());
@@ -25,323 +16,227 @@ const io = new Server(server, {
   cors: { origin: "*" },
 });
 
-// expose io to game logic
-const { setIO } = require("./io");
-setIO(io);
-
-// ======================
-// ROOMS STORAGE
-// ======================
 const rooms = {};
 
-// ======================
-// SOCKET CONNECTION
-// ======================
 io.on("connection", (socket) => {
-  console.log("✅ Player connected:", socket.id);
+  console.log("✅ Connected:", socket.id);
 
-  // ======================
-  // CREATE ROOM
-  // ======================
-  socket.on("create_room", ({ playerName }) => {
-    const roomId = Math.random().toString(36).substring(2, 8);
-
-    rooms[roomId] = {
-      players: [],
-      gameState: null,
-    };
-
+  // ====================================================
+  // JOIN GAME (Single entry point)
+  // ====================================================
+  socket.on("JOIN_GAME", ({ roomId }) => {
     socket.roomId = roomId;
     socket.join(roomId);
 
-    rooms[roomId].players.push({
-      socketId: socket.id,
-      playerId: "player1",
-      name: playerName,
-    });
-
-    socket.emit("room_created", {
-      roomId,
-      playerId: "player1",
-    });
-
-    console.log("🏠 Room created:", roomId);
-  });
-
-  // ======================
-  // JOIN ROOM
-  // ======================
-  socket.on("join_room", ({ roomId, playerName }) => {
-    console.log("📥 join_room received:", roomId, playerName);
+    if (!rooms[roomId]) {
+      rooms[roomId] = {
+        players: [],
+        gameState: null,
+      };
+    }
 
     const room = rooms[roomId];
-    if (!room) {
-      socket.emit("room_error", "Room not found");
-      return;
+
+    // Assign player slot
+    let player = room.players.find(p => p.socketId === socket.id);
+
+    if (!player) {
+      const playerIndex = room.players.length;
+
+      if (playerIndex >= 4) {
+        socket.emit("room_error", "Room is full");
+        return;
+      }
+
+      const playerId = `player${playerIndex + 1}`;
+
+      player = {
+        socketId: socket.id,
+        playerId,
+      };
+
+      room.players.push(player);
+      socket.emit("PLAYER_ASSIGNED", { playerId });
     }
 
-    if (room.players.length >= 4) {
-      socket.emit("room_error", "Room is full");
-      return;
+    // Bootstrap game only once
+    if (!room.gameState) {
+      const gameState = createInitialGameState();
+
+      let deck = createDeck();
+      deck = shuffleDeck(deck);
+      const dealt = dealCards(deck);
+
+      gameState.players.player1.cards = dealt.player1;
+      gameState.players.player2.cards = dealt.player2;
+      gameState.players.player3.cards = dealt.player3;
+      gameState.players.player4.cards = dealt.player4;
+
+      gameState.phase = "CALLING";
+      gameState.currentTurnIndex = 0;
+      gameState.currentCallIndex = 0;
+      gameState.highestCall = null;
+      gameState.highestCaller = null;
+
+      room.gameState = gameState;
+
+      console.log("🎮 Game bootstrapped:", roomId);
     }
 
-    const playerId = `player${room.players.length + 1}`;
-
-    socket.roomId = roomId;
-    socket.join(roomId);
-
-    room.players.push({
-      socketId: socket.id,
-      playerId,
-      name: playerName,
-    });
-
-    socket.emit("room_joined", {
-      roomId,
-      playerId,
-    });
-
-    io.to(roomId).emit("players_update", room.players);
-
-    console.log("👤 Player joined:", playerName, playerId);
-
-    // Auto start when 4 players join
-    if (room.players.length === 4) {
-      room.gameState = createInitialGameState();
-      io.to(roomId).emit("game_ready");
-      console.log("🎮 Game ready in room:", roomId);
-    }
-  });
-
-  // ======================
-  // START GAME
-  // ======================
-  socket.on("start_game", () => {
-    const roomId = socket.roomId || socket.roomID;
-    const room = rooms[roomId];
-    if (!room) return;
-
-    room.gameState = createInitialGameState();
     const gameState = room.gameState;
 
-    gameState.currentCallIndex = 0;
-    gameState.currentTurnIndex = 0;
-    gameState.highestCall = null;
-    gameState.highestCaller = null;
+    // Send private cards
+    socket.emit(
+      "your_cards",
+      gameState.players[player.playerId].cards
+    );
 
-    let deck = createDeck();
-    deck = shuffleDeck(deck);
-    const dealt = dealCards(deck);
-
-    gameState.players.player1.cards = dealt.player1;
-    gameState.players.player2.cards = dealt.player2;
-    gameState.players.player3.cards = dealt.player3;
-    gameState.players.player4.cards = dealt.player4;
-
-    // Send cards privately to each player
-    room.players.forEach((p) => {
-      io.to(p.socketId).emit(
-        "your_cards",
-        gameState.players[p.playerId].cards
-      );
-    });
-
-    gameState.phase = "CALLING";
-
-    const firstPlayer =
-      gameState.callOrder[gameState.currentTurnIndex];
-
-    io.to(roomId).emit("turn_update", firstPlayer);
-    io.to(roomId).emit("phase_update", "CALLING");
-
-    console.log("🂡 Cards dealt & game started:", roomId);
+    // Send current phase + turn to everyone
+    io.to(roomId).emit("phase_update", gameState.phase);
+    io.to(roomId).emit(
+      "turn_update",
+      gameState.callOrder[gameState.currentTurnIndex]
+    );
   });
 
-  // ======================
+  // ====================================================
   // MAKE CALL (BIDDING)
-  // ======================
- socket.on("make_call", ({ playerId, call }) => {
-  const roomId = socket.roomId;
-  const room = rooms[roomId];
-  if (!room || !room.gameState) return;
-
-  const gameState = room.gameState;
-
-  if (gameState.phase !== "CALLING") return;
-
-  const expectedPlayer =
-    gameState.callOrder[gameState.currentCallIndex];
-
-  if (playerId !== expectedPlayer) {
-    return; // ignore invalid clicks
-  }
-
-  // update highest bid
-  if (
-    gameState.highestCall === null ||
-    call > gameState.highestCall
-  ) {
-    gameState.highestCall = call;
-    gameState.highestCaller = playerId;
-
-    io.to(roomId).emit("bid_update", {
-      bid: call,
-      playerId,
-    });
-  }
-
-  // advance call turn
-  gameState.currentCallIndex =
-    (gameState.currentCallIndex + 1) % 4;
-
-  const nextPlayer =
-    gameState.callOrder[gameState.currentCallIndex];
-
-  io.to(roomId).emit("turn_update", nextPlayer);
-
-  // END CALLING after full round
-  if (gameState.currentCallIndex === 0) {
-    gameState.phase = "TRUMP";
-    io.to(roomId).emit("phase_update", "TRUMP");
-
-    // ONLY highest bidder declares trump
-    io.to(roomId).emit("turn_update", gameState.highestCaller);
-  }
-});
-
-
-
-
-  // ======================
-// DECLARE TRUMP
-// ======================
-socket.on("declare_trump", ({ playerId, trumpSuit }) => {
-  const roomId = socket.roomId;
-  const room = rooms[roomId];
-  if (!room || !room.gameState) return;
-
-  const gameState = room.gameState;
-
-  // guards
-  if (gameState.phase !== "TRUMP") return;
-  if (playerId !== gameState.highestCaller) return;
-
-  // ✅ SET TRUMP (SINGLE SOURCE OF TRUTH)
-  gameState.trump = trumpSuit;
-
-  console.log("♠️ TRUMP SET:", trumpSuit);
-
-  // ✅ BROADCAST ONCE
-  io.to(roomId).emit("trump_set", {
-    trump: trumpSuit,
-    caller: playerId,
-  });
-
-  // move to playing
-  gameState.phase = "PLAYING";
-  io.to(roomId).emit("phase_update", "PLAYING");
-
-  // highest bidder starts
-  gameState.currentTurnIndex =
-    gameState.callOrder.indexOf(gameState.highestCaller);
-
-  io.to(roomId).emit(
-    "turn_update",
-    gameState.callOrder[gameState.currentTurnIndex]
-  );
-});
-
-
-  // ======================
-  // PLAY CARD
-  // ======================
-  socket.on("play_card", ({ playerId, card }) => {
-    const roomId = socket.roomId;
-    const room = rooms[roomId];
+  // ====================================================
+  socket.on("make_call", ({ playerId, call }) => {
+    const room = rooms[socket.roomId];
     if (!room || !room.gameState) return;
 
     const gameState = room.gameState;
-    // Guard: ensure game is in PLAYING phase
-    if (gameState.phase !== "PLAYING") {
-      return socket.emit("play_error", "Not in playing phase");
-    }
 
-    // Guard: ensure it's the expected player's turn
+    if (gameState.phase !== "CALLING") return;
+
     const expectedPlayer =
-      gameState.callOrder[gameState.currentTurnIndex];
+      gameState.callOrder[gameState.currentCallIndex];
 
-    if (playerId !== expectedPlayer) {
-      return socket.emit("play_error", "Not your turn");
+    if (playerId !== expectedPlayer) return;
+
+    // PASS logic
+    if (call !== "PASS") {
+      if (
+        gameState.highestCall === null ||
+        call > gameState.highestCall
+      ) {
+        gameState.highestCall = call;
+        gameState.highestCaller = playerId;
+
+        io.to(socket.roomId).emit("bid_update", {
+          bid: call,
+          playerId,
+        });
+      }
     }
-    const result = playCard(gameState, playerId, card, roomId);
 
-    
+    // Move to next bidder
+    gameState.currentCallIndex =
+      (gameState.currentCallIndex + 1) % 4;
 
+    const next =
+      gameState.callOrder[gameState.currentCallIndex];
 
-    if (result.error) {
-      socket.emit("play_error", result.error);
-      return;
-    }
+    io.to(socket.roomId).emit("turn_update", next);
 
-    // Confirm success to the playing client
-    socket.emit("play_success", card);
+    // End bidding after full round
+    if (gameState.currentCallIndex === 0 && gameState.highestCaller) {
+      gameState.phase = "TRUMP";
 
-    // Broadcast the played card to all clients
-    io.to(roomId).emit("card_played", { playerId, card });
+      gameState.currentTurnIndex =
+        gameState.callOrder.indexOf(gameState.highestCaller);
 
-    // If the trick resolution indicated game over, clear room state
-    if (result && result.gameOver) {
-      room.gameState = null;
-      console.log("🔚 Game over in room:", roomId, result);
-      return;
+      io.to(socket.roomId).emit("trump_phase_started", {
+        highestCaller: gameState.highestCaller,
+      });
+
+      io.to(socket.roomId).emit("phase_update", "TRUMP");
+      io.to(socket.roomId).emit(
+        "turn_update",
+        gameState.highestCaller
+      );
+
+      console.log(
+        "🎯 TRUMP phase started. Caller:",
+        gameState.highestCaller
+      );
     }
   });
 
-  // ======================
-  // DISCONNECT
-  // ======================
-  socket.on("disconnect", () => {
-  const roomId = socket.roomId;
-  if (!roomId) {
-    console.log("❌ Player disconnected (no room):", socket.id);
-    return;
-  }
+  // ====================================================
+  // DECLARE TRUMP
+  // ====================================================
+  socket.on("declare_trump", ({ playerId, trumpSuit }) => {
+    const room = rooms[socket.roomId];
+    if (!room || !room.gameState) return;
 
-  const room = rooms[roomId];
-  if (!room) return;
+    const gameState = room.gameState;
 
-  console.log("❌ Player disconnected:", socket.id, "from room", roomId);
+    if (gameState.phase !== "TRUMP") return;
+    if (playerId !== gameState.highestCaller) return;
 
-  // Remove player from room
-  room.players = room.players.filter(
-    (p) => p.socketId !== socket.id
-  );
+    gameState.trump = trumpSuit;
+    gameState.phase = "PLAYING";
 
-  // Notify remaining players
-  io.to(roomId).emit("players_update", room.players);
-
-  // If room empty → delete room
-  if (room.players.length === 0) {
-    delete rooms[roomId];
-    console.log("🗑️ Room deleted:", roomId);
-    return;
-  }
-
-  // If game was running → reset game
-  if (room.gameState) {
-    room.gameState = null;
-    io.to(roomId).emit("game_reset", {
-      reason: "Player disconnected",
+    io.to(socket.roomId).emit("trump_set", {
+      trump: trumpSuit,
     });
-    console.log("🔄 Game reset in room:", roomId);
-  }
+
+    io.to(socket.roomId).emit("phase_update", "PLAYING");
+
+    gameState.currentTurnIndex =
+      gameState.callOrder.indexOf(gameState.highestCaller);
+
+    io.to(socket.roomId).emit(
+      "turn_update",
+      gameState.callOrder[gameState.currentTurnIndex]
+    );
+
+    console.log("♠️ Trump selected:", trumpSuit);
+  });
+
+  // ====================================================
+  // PLAY CARD
+  // ====================================================
+  socket.on("play_card", ({ playerId, card }) => {
+    const room = rooms[socket.roomId];
+    if (!room || !room.gameState) return;
+
+    const result = playCard(
+      room.gameState,
+      playerId,
+      card,
+      socket.roomId
+    );
+
+    if (result?.error) {
+      socket.emit("play_error", result.error);
+    }
+  });
+
+  // ====================================================
+  // DISCONNECT
+  // ====================================================
+  socket.on("disconnect", () => {
+    const roomId = socket.roomId;
+    if (!roomId || !rooms[roomId]) return;
+
+    const room = rooms[roomId];
+
+    room.players = room.players.filter(
+      p => p.socketId !== socket.id
+    );
+
+    console.log("❌ Disconnected:", socket.id);
+
+    if (room.players.length === 0) {
+      delete rooms[roomId];
+      console.log("🗑 Room deleted:", roomId);
+    }
+  });
 });
 
-});
-
-// ======================
-// START SERVER
-// ======================
 server.listen(3001, () => {
-  console.log("🚀 Server running on port 3001");
+  console.log("🚀 Server running on 3001");
 });
