@@ -11,6 +11,7 @@ function createInitialGameState() {
 
     callOrder: ["player1", "player2", "player3", "player4"],
     currentTurnIndex: 0,
+     currentCallIndex: 0,
 
     highestCall: null,
     highestCaller: null,
